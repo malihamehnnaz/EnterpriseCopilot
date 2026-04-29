@@ -55,6 +55,20 @@ README.md
 - Query logging for auditability
 - Model routing for simple vs complex prompts
 
+## Production Improvements
+
+- Request-scoped logging with correlation IDs and latency tracking
+- Global API exception handling with consistent error payloads
+- LLM concurrency controls and timeout protection for safer scaling
+- Retrieval context trimming to reduce prompt size and token spend
+- Retrieval-result caching plus response caching to lower repeated LLM calls
+- No-context short-circuiting to avoid unnecessary model usage
+- Validator and action-agent skipping for low-cost simple QA flows
+- Hybrid retrieval that blends semantic vector search with keyword scoring
+- Session-based short-term agent memory for multi-turn enterprise workflows
+- Explicit feedback capture endpoint for human-in-the-loop improvement
+- Retrieval evaluation endpoint with precision@$k$ and recall@$k$
+
 ## Environment Setup
 
 1. Copy `.env.example` to `.env`
@@ -132,7 +146,31 @@ curl -X POST http://localhost:8000/query \
   -H "Content-Type: application/json" \
   -H "x-user-id: jane.doe" \
   -H "x-user-role: analyst" \
+  -H "x-session-id: aml-review-01" \
   -d '{"message":"Generate an email explaining the new KYC review workflow.","task_type":"email"}'
+```
+
+### `POST /feedback`
+
+Collects explicit user feedback for continuous improvement.
+
+```bash
+curl -X POST http://localhost:8000/feedback \
+  -H "Content-Type: application/json" \
+  -H "x-user-id: jane.doe" \
+  -d '{"session_id":"aml-review-01","helpful":true,"rating":5,"feedback_text":"Grounded and accurate."}'
+```
+
+### `POST /evaluation/retrieval`
+
+Returns retrieval precision@$k$ and recall@$k$ for a labeled query.
+
+```bash
+curl -X POST http://localhost:8000/evaluation/retrieval \
+  -H "Content-Type: application/json" \
+  -H "x-user-id: jane.doe" \
+  -H "x-user-role: analyst" \
+  -d '{"query":"KYC review escalation policy","relevant_chunk_ids":["chunk-1","chunk-9"],"top_k":4}'
 ```
 
 ## Security Notes
@@ -150,4 +188,3 @@ curl -X POST http://localhost:8000/query \
 - Add stronger PII redaction and DLP controls
 - Add unit, integration, and load tests
 - Switch FAISS to Azure AI Search for distributed retrieval
-# EnterpriseCopilot
