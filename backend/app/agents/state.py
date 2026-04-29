@@ -9,9 +9,14 @@ class CopilotState(TypedDict, total=False):
     user_id: str
     user_role: str
     session_id: str | None
+    # Orchestrator routing
+    active_agent: str
+    agent_description: str
+    # Retrieval
     conversation_history: str
     retrieved_context: str
     sources: list[SourceItem]
+    # Generation
     draft_answer: str
     final_answer: str
     validation: str
