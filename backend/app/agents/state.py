@@ -12,6 +12,8 @@ class CopilotState(TypedDict, total=False):
     # Orchestrator routing
     active_agent: str
     agent_description: str
+    # Specialist agent domain prompt (injected before reasoning)
+    specialist_prompt: str
     # Retrieval
     conversation_history: str
     retrieved_context: str

@@ -1,9 +1,25 @@
+from app.agents.analytics_agent import AnalyticsAgent
+from app.agents.compliance_agent import ComplianceAgent
+from app.agents.finance_agent import FinanceAgent
+from app.agents.hr_agent import HRAgent
+from app.agents.report_agent import ReportGenerationAgent
 from app.agents.state import CopilotState
+from app.agents.workflow_agent import WorkflowAgent
 from app.schemas.common import TokenUsage
 from app.services.action_service import ActionService
 from app.services.llm_service import LLMService
 from app.services.memory_service import MemoryService
 from app.services.rag_service import RAGService
+
+# Specialist agent registry — maps active_agent name → agent instance
+_SPECIALIST_AGENTS = {
+    "hr": HRAgent(),
+    "finance": FinanceAgent(),
+    "compliance": ComplianceAgent(),
+    "analytics": AnalyticsAgent(),
+    "report": ReportGenerationAgent(),
+    "workflow": WorkflowAgent(),
+}
 
 
 class CopilotNodes:
@@ -24,6 +40,29 @@ class CopilotNodes:
             "sources": [chunk.source for chunk in chunks],
         }
 
+    async def specialist(self, state: CopilotState) -> CopilotState:
+        """
+        Dispatch to the active specialized agent to build a domain-specific prompt.
+        Falls back to a generic prompt if no specialist is matched.
+        """
+        agent_key = state.get("active_agent", "general")
+        context = state.get("retrieved_context", "")
+        query = state["message"]
+        user_role = state.get("user_role", "employee")
+
+        agent = _SPECIALIST_AGENTS.get(agent_key)
+        if agent and hasattr(agent, "build_prompt"):
+            specialist_prompt = agent.build_prompt(query, context, user_role)
+        else:
+            specialist_prompt = (
+                f"You are a knowledgeable enterprise assistant.\n"
+                f"User Role: {user_role}\n"
+                f"Question: {query}\n\n"
+                f"Context:\n{context or 'No context available.'}\n\n"
+                "Answer clearly and cite your sources:"
+            )
+        return {"specialist_prompt": specialist_prompt}
+
     async def reasoner(self, state: CopilotState) -> CopilotState:
         if not (state.get("retrieved_context") or "").strip():
             answer = (
@@ -36,17 +75,31 @@ class CopilotNodes:
                 "token_usage": self.llm_service.token_service.build_usage(state["message"], answer),
             }
         complexity = self.llm_service.classify_complexity(state["message"])
-        prompt = (
-            f"Role: {state['user_role']}\n"
-            f"Task: {state['task_type']}\n"
-            f"Conversation memory:\n{state.get('conversation_history') or 'No prior memory available.'}\n\n"
-            f"Question: {state['message']}\n\n"
-            f"Approved context:\n{state.get('retrieved_context') or 'No approved context available.'}\n\n"
-            "Instructions: Answer only using approved context. Cite chunk IDs in square brackets. "
-            "If there is not enough information, say that explicitly."
-        )
+
+        # Use the specialist-built prompt if available, otherwise fall back to the generic prompt
+        specialist_prompt = state.get("specialist_prompt", "").strip()
+        if specialist_prompt:
+            prompt = (
+                f"{specialist_prompt}\n\n"
+                f"Conversation memory:\n{state.get('conversation_history') or 'No prior memory available.'}\n\n"
+                "Instructions: Answer only using approved context above. Cite chunk IDs in square brackets. "
+                "If there is not enough information, say that explicitly."
+            )
+            system_msg = f"You are a secure enterprise {state.get('active_agent', 'general')} agent."
+        else:
+            prompt = (
+                f"Role: {state['user_role']}\n"
+                f"Task: {state['task_type']}\n"
+                f"Conversation memory:\n{state.get('conversation_history') or 'No prior memory available.'}\n\n"
+                f"Question: {state['message']}\n\n"
+                f"Approved context:\n{state.get('retrieved_context') or 'No approved context available.'}\n\n"
+                "Instructions: Answer only using approved context. Cite chunk IDs in square brackets. "
+                "If there is not enough information, say that explicitly."
+            )
+            system_msg = "You are a secure enterprise reasoning agent."
+
         answer = await self.llm_service.complete(
-            "You are a secure enterprise reasoning agent.",
+            system_msg,
             prompt,
             complexity=complexity,
         )
