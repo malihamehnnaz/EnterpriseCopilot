@@ -1,12 +1,16 @@
+import time
+
 from langgraph.graph import END, START, StateGraph
 
 from app.agents.nodes import CopilotNodes
 from app.agents.orchestrator import OrchestratorAgent
 from app.agents.state import CopilotState
 from app.schemas.chat import QueryResponse
+from app.schemas.common import SourceItem, TokenUsage
 from app.services.action_service import ActionService
 from app.services.llm_service import LLMService
 from app.services.memory_service import MemoryService
+from app.services.observability_service import ObservabilityService, build_query_record
 from app.services.rag_service import RAGService
 
 
@@ -16,6 +20,7 @@ class CopilotWorkflow:
     def __init__(self, rag_service: RAGService, llm_service: LLMService, action_service: ActionService, memory_service: MemoryService) -> None:
         self.nodes = CopilotNodes(rag_service, llm_service, action_service, memory_service)
         self._orchestrator = OrchestratorAgent()
+        self._observability = ObservabilityService()
 
         graph = StateGraph(CopilotState)
         graph.add_node("orchestrator", self._orchestrate)
@@ -39,6 +44,7 @@ class CopilotWorkflow:
         return routing
 
     async def run(self, message: str, task_type: str, user_id: str, user_role: str, session_id: str | None = None) -> QueryResponse:
+        start_ms = time.monotonic()
         state = await self.graph.ainvoke(
             {
                 "message": message,
@@ -48,13 +54,38 @@ class CopilotWorkflow:
                 "session_id": session_id,
             }
         )
+        latency_ms = int((time.monotonic() - start_ms) * 1000)
+
+        token_usage: TokenUsage = state.get("token_usage") or TokenUsage()
+        sources: list[SourceItem] = state.get("sources", [])
+        final_answer = state.get("final_answer") or state.get("draft_answer") or "No answer generated."
+        validation = state.get("validation")
+        active_agent = state.get("active_agent", "general")
+
+        # Persist the full run record to the database
+        record = build_query_record(
+            user_id=user_id,
+            session_id=session_id,
+            role=user_role,
+            request_type=task_type,
+            active_agent=active_agent,
+            query_text=message,
+            response_text=final_answer,
+            model_name=state.get("model_used", "unknown"),
+            token_usage=token_usage,
+            sources=sources,
+            latency_ms=latency_ms,
+            validation_result=validation,
+        )
+        await self._observability.log_query_run(record)
+
         return QueryResponse(
-            answer=state.get("final_answer") or state.get("draft_answer") or "No answer generated.",
+            answer=final_answer,
             task_type=task_type,
-            sources=state.get("sources", []),
-            validation=state.get("validation"),
+            sources=sources,
+            validation=validation,
             model_used=state.get("model_used", "unknown"),
-            token_usage=state.get("token_usage"),
+            token_usage=token_usage,
             session_id=session_id,
             memory_used=bool(state.get("conversation_history")),
         )
